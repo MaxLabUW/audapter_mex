@@ -127,6 +127,8 @@ Audapter::Audapter() :
 	params.addBoolParam("bcepslift", "Switch for cepstral liftering for formant trackng");
 	params.addBoolParam("btimedomainshift", "Perform time-domain pitch shifting, by tracking pitch in real-time, using cepstral method");
 	params.addBoolParam("bratioshift", "Switch for ratio-based formant shifting");
+	params.addBoolParam("bfixshift", "Switch for fix formant shifting [HW&KSK]"); //HW&KSK
+	params.addBoolParam("bxtrashift", "Switch for extra formant shifting [HW&KSK]"); //HW&KSK
 	params.addBoolParam("bmelshift", "Switch for formant shifting based on the mel frequency scale");
 	params.addBoolParam("bgainadapt", "Formant perturbation gain adaptation switch");
 	params.addBoolParam("brmsclip", "Switch for auto RMS intensity clipping (loudness protection)");	//
@@ -178,6 +180,13 @@ Audapter::Audapter() :
 	params.addDoubleParam("f1max", "Formant perturbation field: maximum F1 (Hz)");
 	params.addDoubleParam("lbk", "Formant perturbation field: Oblique lower border: Slope k");
 	params.addDoubleParam("lbb", "Formant perturbation field: Oblique lower border: Intercept b");
+
+	//HW&KSK: input of fixed F1 and F2
+	params.addDoubleParam("f2fix", "Formant perturbation field: fixed F2 (Hz)");
+	params.addDoubleParam("f1fix", "Formant perturbation field: fixed F1 (Hz)");
+
+	//HW&KSK: input of the coefficient of extra shift (multiplier)
+	params.addDoubleParam("xtracoef", "Formant perturbation field: extra shift scaling coefficient");
 
 	params.addDoubleParam("triallen", "Trial length (s)");
 	params.addDoubleParam("ramplen", "Audio ramp length (s)");
@@ -317,6 +326,8 @@ Audapter::Audapter() :
 	p.pitchUpperBoundHz = 0.0;
 
 	p.bRatioShift		= 0;	//SC(2009/01/20)
+	p.bFixShift         = 0;    //HW&KSK
+	p.bXtraShift        = 0;    //HW&KSK
 	p.bMelShift			= 1;	//SC(2009/01/20)
 
 	//SC(2012/03/05)
@@ -346,6 +357,13 @@ Audapter::Audapter() :
 	p.F1Max		= 0;		// Right boundary of the perturbation field (mel)
 	p.LBk		= 0;		// The slope of a tilted boundary: F2 = p.LBk * F1 + p.LBb. (mel/mel)
 	p.LBb		= 0;		// The intercept of a tilted boundary (mel)
+
+	//HW&KSK: input fixed formant shift F1 and F2
+	p.F1Fix     = 0;		// Fixed input F1
+	p.F2Fix     = 0;		// Fixed input F2
+
+	//HW&KSK: input extra shift scaling coefficient
+	p.XtraCoef  = 0;
 
 	for(n=0;n<pfNPoints;n++){
 		p.pertF2[n]=0;			// Independent variable of the perturbation vectors
@@ -701,6 +719,12 @@ void *Audapter::setGetParam(bool bSet,
 	else if (ns == string("bratioshift")) {
 		ptr = (void *)&p.bRatioShift;
 	}
+	else if (ns == string("bfixshift")) { // added by HW&KSK for fixed formant shift
+		ptr = (void *)&p.bFixShift;
+	}
+	else if (ns == string("bxtrashift")) { // added by HW&KSK for extra formant shift
+		ptr = (void *)&p.bXtraShift;
+	}
 	else if (ns == string("bmelshift")) {
 		ptr = (void *)&p.bMelShift;
 	}
@@ -911,6 +935,17 @@ void *Audapter::setGetParam(bool bSet,
 	}
 	else if (ns == string("lbb")) {
 		ptr = (void *)&p.LBb;
+	}
+	//HW&KSK: input to fixed formant shift: F1Fix, F2Fix
+	else if (ns == string("f1fix")) {
+	ptr = (void *)&p.F1Fix;
+	}
+	else if (ns == string("f2fix")) {
+	ptr = (void *)&p.F2Fix;
+	}
+	//HW&KSK: input to extra shift: xtracoef
+	else if (ns == string("xtracoef")) {
+	ptr = (void *)&p.XtraCoef;
 	}
 	else if (ns == string("triallen")) {
 		ptr = (void *)&p.trialLen;
@@ -1667,31 +1702,49 @@ int Audapter::handleBuffer(dtype *inFrame_ptr, dtype *outFrame_ptr, int frame_si
 			}
 
 			if (during_trans && above_rms) {  // Determine whether the current point in perturbation field
-			    // yes : windowed deviation over x coordinate
+				// yes : windowed deviation over x coordinate
 				loc = locateF2(f2mp);	// Interpolation (linear)								
-                locint = static_cast<int>(floor(loc));
+				locint = static_cast<int>(floor(loc));
 				locfrac = loc - locint;
-				
-				/* That using ost and pcf files overrides the perturbatoin field 
+
+				/* That using ost and pcf files overrides the perturbatoin field
 					specified with pertF2, pertAmp, pertPhi. */
 				if (pertCfg.n > 0) {
 					mamp = pertCfg.fmtPertAmp[stat];
 					mphi = pertCfg.fmtPertPhi[stat];
 				}
 				else {
-					mamp = p.pertAmp[locint] + locfrac*(p.pertAmp[locint + 1] - p.pertAmp[locint]);	// Interpolaton (linear)
-					mphi = p.pertPhi[locint] + locfrac*(p.pertPhi[locint + 1] - p.pertPhi[locint]);
+					mamp = p.pertAmp[locint] + locfrac * (p.pertAmp[locint + 1] - p.pertAmp[locint]);	// Interpolaton (linear)
+					mphi = p.pertPhi[locint] + locfrac * (p.pertPhi[locint + 1] - p.pertPhi[locint]);
 				}
 
-				if (!p.bRatioShift){	// Absoluate shift					
-					sf1m = f1m + mamp * cos(mphi);	// Shifting imposed
-					sf2m = f2m + mamp * sin(mphi);
+				if (!p.bRatioShift) {	// Absoluate shift 
+					if (!p.bFixShift) { //(not fixed)
+						if (!p.bXtraShift) {
+							sf1m = f1m + mamp * cos(mphi);	// Shifting imposed
+							sf2m = f2m + mamp * sin(mphi);
+						}
+						else { //HW&KSK: Extra shift, in absolute Hz value
+							sf1m = p.F1Fix + p.XtraCoef*(f1m - p.F1Fix);
+							sf2m = p.F2Fix + p.XtraCoef*(f2m - p.F2Fix);
+						}
+
+						//sf1m = f1m + mamp * cos(mphi);	// Shifting imposed
+						//sf2m = f2m + mamp * sin(mphi);
+					}
+					else { //HW&KSK added to make sure it absolute, but fixed.
+						//sf1m = 660.0;
+						//sf2m = 1720.0;
+						sf1m = p.F1Fix;
+						sf2m = p.F2Fix;
+					}
 				}
-				else{	// Ratio shift					
-					//mamp=p.pertAmp[locint]+locfrac*(p.pertAmp[locint+1]-p.pertAmp[locint]);					
+				else {	// Ratio shift
+				 //mamp=p.pertAmp[locint]+locfrac*(p.pertAmp[locint+1]-p.pertAmp[locint]);
 					sf1m = f1m * (1 + mamp * cos(mphi));
 					sf2m = f2m * (1 + mamp * sin(mphi));
 				}
+
 
 				if (p.bMelShift){
 					newPhis[0]=mel2hz(sf1m)/p.sr*2*M_PI;	// Convert back to Hz

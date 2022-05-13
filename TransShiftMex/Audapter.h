@@ -427,6 +427,8 @@ private:
 
 		int	   bRatioShift;				//SC(2009/01/20). 
 		int	   bMelShift;				//SC(2009/01/20). 
+		int    bFixShift;               //HW&KSK (2018/10/23)
+		int    bXtraShift;               //HW&KSK (2019/1/7)
 
 		//SC(2012/03/05) Frequency/pitch shifting
 		int		bPitchShift;
@@ -454,6 +456,13 @@ private:
 		dtype pertPhi[pfNPoints];
 		dtype pertAmp[pfNPoints];
 		dtype minVowelLen;
+
+		//HW&KSK: Fixed F1 and F2 input
+		dtype F1Fix;
+		dtype F2Fix;
+
+		//HW&KSK: Scaling coefficient for extra shift
+		dtype XtraCoef;
 		
 		bool transDone;
 
